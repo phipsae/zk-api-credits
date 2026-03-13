@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  api-server:
+    build: .
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env
+    depends_on:
+      - hardhat-node
+    restart: unless-stopped
+
+  hardhat-node:
+    image: node:22-slim
+    working_dir: /app
+    volumes:
+      - ../hardhat:/app
+    command: >
+      sh -c "npm install && npx hardhat node --hostname 0.0.0.0"
+    ports:
+      - "8545:8545"
