@@ -101,12 +101,54 @@ docker compose up
 
 ## Quick Start — Use an Existing Server
 
-If someone is already running a ZK API Credits server:
+The live server is at **https://zkllmapi.com**
 
-1. **Stake CLAWD** — Visit the frontend and deposit CLAWD into the contract
-2. **Register commitments** — Generate secret credentials and register them on-chain. Your secrets are saved to localStorage
-3. **Generate a ZK proof** — The browser builds a proof that you own a valid commitment without revealing which one
-4. **Call the API** — POST your proof + messages to the server's `/v1/chat` endpoint
+### Step 1 — Get CLAWD
+Buy or earn [CLAWD](https://basescan.org/address/0x9f86dB9fc6f7c9408e8Fda3Ff8ce4e78ac7a6b07) on Base mainnet.
+
+### Step 2 — Stake + Register via the frontend
+1. Visit the frontend (coming soon) or interact directly with the contract
+2. Approve CLAWD spend: call `clawdToken.approve(0x9991f959040De3c5df0515FFCe8B38b72cB7F26c, amount)`
+3. Stake: call `stake(amount)` on the APICredits contract
+4. Generate a commitment locally: `commitment = poseidon2(nullifier, secret)`
+5. Register: call `register(commitment)` — this locks 1000 CLAWD per credit into the server pool
+
+### Step 3 — Generate a ZK proof (browser/JS)
+```js
+import { UltraHonkBackend } from "@aztec/bb.js";
+import { Noir } from "@noir-lang/noir_js";
+import circuit from "./target/api_credits.json";
+
+const backend = new UltraHonkBackend(circuit.bytecode);
+const noir = new Noir(circuit);
+
+const { witness } = await noir.execute({
+  nullifier_hash: poseidon2([nullifier]),   // public
+  root,                                      // public (from contract)
+  depth,                                     // public
+  nullifier,                                 // private
+  secret,                                    // private
+  index,                                     // private
+  siblings,                                  // private (Merkle path)
+});
+const { proof } = await backend.generateProof(witness);
+```
+
+### Step 4 — Call the API
+```bash
+curl -X POST https://zkllmapi.com/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "proof": "0x...",
+    "nullifier_hash": "0x...",
+    "root": "0x...",
+    "depth": 16,
+    "messages": [{ "role": "user", "content": "What is Ethereum?" }],
+    "model": "llama-3.3-70b"
+  }'
+```
+
+No API key. No account. Just a proof.
 
 ---
 
