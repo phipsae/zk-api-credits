@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   8453: {
     APICredits: {
-      address: "0x9991f959040De3c5df0515FFCe8B38b72cB7F26c",
+      address: "0x234d536e1623546F394707D6dB700f9c8CD29476",
       abi: [
         {
           inputs: [
@@ -476,10 +476,10 @@ const deployedContracts = {
         renounceOwnership: "@openzeppelin/contracts/access/Ownable.sol",
         transferOwnership: "@openzeppelin/contracts/access/Ownable.sol",
       },
-      deployedOnBlock: 43293530,
+      deployedOnBlock: 43333967,
     },
-    LeanIMT: {
-      address: "0x351a3156322DB4D26Ea5a800D01Fb418C8764a40",
+    Poseidon2LeanIMT: {
+      address: "0x1a826fad0D2f07F0aE65E63f0923D5E28FC85393",
       abi: [
         {
           inputs: [],
@@ -508,36 +508,10 @@ const deployedContracts = {
         },
       ],
       inheritedFunctions: {},
-      deployedOnBlock: 43293496,
-    },
-    PoseidonT3: {
-      address: "0x9fAbEe1b1Ef0a11b8A02fEf563AffD4f79EB6f54",
-      abi: [
-        {
-          inputs: [
-            {
-              internalType: "uint256[2]",
-              name: "",
-              type: "uint256[2]",
-            },
-          ],
-          name: "hash",
-          outputs: [
-            {
-              internalType: "uint256",
-              name: "",
-              type: "uint256",
-            },
-          ],
-          stateMutability: "pure",
-          type: "function",
-        },
-      ],
-      inheritedFunctions: {},
-      deployedOnBlock: 43293488,
+      deployedOnBlock: 43333933,
     },
     UltraVerifier: {
-      address: "0x257d0ba84adE9fFb9705C78E2E623E72eE480C3B",
+      address: "0xeD1005d68bBa6cb955BAE51A479aA827554Ab494",
       abi: [
         {
           inputs: [],
@@ -634,7 +608,7 @@ const deployedContracts = {
         },
       ],
       inheritedFunctions: {},
-      deployedOnBlock: 43293509,
+      deployedOnBlock: 43333949,
     },
   },
   31337: {

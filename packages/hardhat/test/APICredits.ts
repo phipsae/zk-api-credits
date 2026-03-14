@@ -24,15 +24,9 @@ describe("APICredits", function () {
     await mockClawd.mint(user1.address, ethers.parseEther("100000"));
     await mockClawd.mint(user2.address, ethers.parseEther("100000"));
 
-    // Deploy PoseidonT3
-    const PoseidonT3 = await ethers.getContractFactory("PoseidonT3");
-    const poseidonT3 = await PoseidonT3.deploy();
-
-    // Deploy LeanIMT with PoseidonT3 library
-    const LeanIMT = await ethers.getContractFactory("LeanIMT", {
-      libraries: { PoseidonT3: await poseidonT3.getAddress() },
-    });
-    const leanIMT = await LeanIMT.deploy();
+    // Deploy Poseidon2LeanIMT library (Noir-compatible Poseidon2 hash)
+    const Poseidon2LeanIMT = await ethers.getContractFactory("Poseidon2LeanIMT");
+    const poseidon2LeanIMT = await Poseidon2LeanIMT.deploy();
 
     // Deploy Verifier
     const Verifier = await ethers.getContractFactory("UltraVerifier");
@@ -40,7 +34,7 @@ describe("APICredits", function () {
 
     // Deploy APICredits
     const APICreditsFactory = await ethers.getContractFactory("APICredits", {
-      libraries: { LeanIMT: await leanIMT.getAddress() },
+      libraries: { Poseidon2LeanIMT: await poseidon2LeanIMT.getAddress() },
     });
     apiCredits = await APICreditsFactory.deploy(
       await mockClawd.getAddress(),

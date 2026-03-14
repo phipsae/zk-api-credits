@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.8.0 <0.9.0;
 
-import {LeanIMT, LeanIMTData} from "@zk-kit/lean-imt.sol/LeanIMT.sol";
-import {InternalLeanIMT} from "@zk-kit/lean-imt.sol/InternalLeanIMT.sol";
+import {Poseidon2LeanIMT, Poseidon2LeanIMTData} from "./poseidon2/Poseidon2LeanIMT.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -20,7 +19,7 @@ import {UltraVerifier} from "./Verifier.sol";
  * Privacy: ZK proof breaks the link between wallet and API usage.
  */
 contract APICredits is Ownable {
-    using LeanIMT for LeanIMTData;
+    using Poseidon2LeanIMT for Poseidon2LeanIMTData;
     using SafeERC20 for IERC20;
 
     // ─── Errors ───────────────────────────────────────────────
@@ -37,7 +36,7 @@ contract APICredits is Ownable {
     mapping(address => uint256) public stakedBalance;
     uint256 public serverClaimable;
 
-    LeanIMTData private s_tree;
+    Poseidon2LeanIMTData private s_tree;
     mapping(uint256 => bool) private s_commitmentUsed;
 
     UltraVerifier private immutable i_verifier;
