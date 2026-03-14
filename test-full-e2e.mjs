@@ -1,23 +1,12 @@
 /**
- * FULL E2E VERIFICATION — runs against local hardhat node
- *
- * Tests:
- * 1. Deploy fresh APICredits contract
- * 2. Stake + register commitment using correct bb.js Poseidon2
- * 3. Fetch merkle path from server logic (replicated here)
- * 4. Manually verify path produces correct root (matching binary_merkle_root circuit)
- * 5. Generate actual ZK proof using the Noir circuit
- * 6. Verify the proof passes on-chain (via UltraVerifier)
- *
- * If this passes: we deploy to mainnet ONCE and we're done.
+ * FULL E2E VERIFICATION — local hardhat node
+ * Verifies everything before mainnet deploy.
  */
-
 import { createRequire } from 'module';
 import { randomBytes } from 'crypto';
 import fs from 'fs';
 const require = createRequire(import.meta.url);
 
-// bb.js requires chdir to find WASM
 process.chdir('/Users/austingriffith/clawd/zk-api-credits/packages/api-server/node_modules/@aztec/bb.js/dest/node');
 const { Barretenberg, Fr, UltraHonkBackend } = await import(
   '/Users/austingriffith/clawd/zk-api-credits/packages/api-server/node_modules/@aztec/bb.js/dest/node/index.js'
@@ -27,225 +16,225 @@ const { ethers } = await import('/Users/austingriffith/clawd/zk-api-credits/pack
 
 const LOCAL_RPC = 'http://localhost:8546';
 const frToBigInt = (fr) => BigInt('0x' + Buffer.from(fr.value).toString('hex'));
+const p2 = async (bb, a, b) => frToBigInt(await bb.poseidon2Hash([new Fr(a), new Fr(b)]));
 
-console.log('=== FULL E2E VERIFICATION (local hardhat) ===\n');
+// Replicates Solidity _computeRoot exactly
+async function computeRoot(bb, filledNodes, zeros, size) {
+  if (size === 0) return zeros[15];
+  let node = 0n, nodeLevel = 0, hasNode = false;
+  for (let i = 0; i < 16; i++) {
+    if (((size >> i) & 1) === 1) {
+      if (!hasNode) {
+        node = filledNodes[i]; nodeLevel = i; hasNode = true;
+      } else {
+        for (let lvl = nodeLevel; lvl < i; lvl++) node = await p2(bb, node, zeros[lvl]);
+        node = await p2(bb, filledNodes[i], node);
+        nodeLevel = i + 1;
+      }
+    }
+  }
+  return node;
+}
 
-// ─── Setup ───────────────────────────────────────────────────────────────────
+// Computes depth for a given tree size (matches Solidity)
+function computeDepth(size) {
+  if (size === 0) return 0;
+  let needed = 0, tmp = size;
+  while (tmp > 1) { needed++; tmp = Math.ceil(tmp / 2); }
+  return needed;
+}
+
+console.log('=== FULL E2E VERIFICATION ===\n');
+
 const provider = new ethers.JsonRpcProvider(LOCAL_RPC);
 const signers = await provider.listAccounts();
-const deployerAddr = signers[0].address;
-const userAddr = signers[1].address;
+const deployerAddr = signers[0].address, userAddr = signers[1].address;
 const deployer = await provider.getSigner(deployerAddr);
 const user = await provider.getSigner(userAddr);
-console.log('Deployer:', deployerAddr);
-console.log('User:', userAddr);
 
 const bb = await Barretenberg.new({ threads: 4 });
-console.log('Barretenberg ready\n');
+console.log('bb ready\n');
 
-// ─── Deploy MockERC20 ────────────────────────────────────────────────────────
-const hardhatArtifacts = '/Users/austingriffith/clawd/zk-api-credits/packages/hardhat/artifacts/contracts';
-const mockERC20Art = JSON.parse(fs.readFileSync(`${hardhatArtifacts}/MockERC20.sol/MockERC20.json`));
-const MockERC20 = new ethers.ContractFactory(mockERC20Art.abi, mockERC20Art.bytecode, deployer);
-const mockClawd = await MockERC20.deploy();
+const arts = '/Users/austingriffith/clawd/zk-api-credits/packages/hardhat/artifacts/contracts';
+const mockArt = JSON.parse(fs.readFileSync(`${arts}/MockERC20.sol/MockERC20.json`));
+const apiArt = JSON.parse(fs.readFileSync(`${arts}/APICredits.sol/APICredits.json`));
+
+// Deploy
+const mockClawd = await (new ethers.ContractFactory(mockArt.abi, mockArt.bytecode, deployer)).deploy();
 await mockClawd.waitForDeployment();
-console.log('[1] MockERC20 deployed:', await mockClawd.getAddress());
-
-// ─── Deploy APICredits ───────────────────────────────────────────────────────
-const apiArt = JSON.parse(fs.readFileSync(`${hardhatArtifacts}/APICredits.sol/APICredits.json`));
-const APICredits = new ethers.ContractFactory(apiArt.abi, apiArt.bytecode, deployer);
-const contract = await APICredits.deploy(await mockClawd.getAddress(), signers[0]);
+const contract = await (new ethers.ContractFactory(apiArt.abi, apiArt.bytecode, deployer)).deploy(
+  await mockClawd.getAddress(), deployerAddr
+);
 await contract.waitForDeployment();
 const contractAddr = await contract.getAddress();
-console.log('[2] APICredits deployed:', contractAddr);
+console.log('[1] MockERC20:', await mockClawd.getAddress());
+console.log('[2] APICredits:', contractAddr);
 
-// ─── Verify zero hashes match bb.js ─────────────────────────────────────────
-console.log('\n[3] Verifying on-chain zero hashes match bb.js Poseidon2...');
-let prevZero = 0n;
-for (let i = 0; i < 4; i++) {
-  const onChain = await contract.zeros(i);
-  if (i === 0) {
-    console.log(`   zeros[0]: on-chain=${onChain}, expected=0 ${onChain === 0n ? '✅' : '❌'}`);
-    prevZero = 0n;
-  } else {
-    const bbHash = frToBigInt(await bb.poseidon2Hash([new Fr(prevZero), new Fr(prevZero)]));
-    console.log(`   zeros[${i}]: on-chain=${onChain.toString().slice(0,20)}... bb.js=${bbHash.toString().slice(0,20)}... ${onChain === bbHash ? '✅' : '❌ MISMATCH'}`);
-    if (onChain !== bbHash) { process.exit(1); }
-    prevZero = bbHash;
-  }
+// Load zeros from contract
+const onChainZeros = [];
+for (let i = 0; i < 16; i++) onChainZeros.push(await contract.zeros(i));
+
+// Verify zeros match bb.js
+console.log('\n[3] Zero hash verification...');
+let prev = 0n;
+for (let i = 0; i < 6; i++) {
+  const expected = i === 0 ? 0n : await p2(bb, prev, prev);
+  const match = onChainZeros[i] === expected;
+  console.log(`   zeros[${i}]: ${match ? '✅' : '❌ MISMATCH'}`);
+  if (!match) process.exit(1);
+  prev = onChainZeros[i];
 }
 
-// ─── Generate commitment ─────────────────────────────────────────────────────
-const nullifier = BigInt('0x' + randomBytes(31).toString('hex'));
-const secret = BigInt('0x' + randomBytes(31).toString('hex'));
-const commitmentFr = await bb.poseidon2Hash([new Fr(nullifier), new Fr(secret)]);
-const nullifierHashFr = await bb.poseidon2Hash([new Fr(nullifier)]);
-const commitment = frToBigInt(commitmentFr);
-const nullifierHash = frToBigInt(nullifierHashFr);
-console.log('\n[4] Commitment generated:', commitment.toString().slice(0,20)+'...');
+// Stake
+await mockClawd.mint(userAddr, ethers.parseEther('10000'));
+const cu = new ethers.Contract(await mockClawd.getAddress(), mockArt.abi, user);
+const au = new ethers.Contract(contractAddr, apiArt.abi, user);
+await cu.approve(contractAddr, ethers.parseEther('10000'));
+await au.stake(ethers.parseEther('10000'));
+console.log('\n[4] Staked 10000 CLAWD');
 
-// ─── Stake + Register ────────────────────────────────────────────────────────
-await mockClawd.mint(userAddr, ethers.parseEther('5000'));
-const clawdUser = new ethers.Contract(await mockClawd.getAddress(), mockERC20Art.abi, user);
-const contractUser = new ethers.Contract(contractAddr, apiArt.abi, user);
-
-await clawdUser.approve(contractAddr, ethers.parseEther('1000'));
-await contractUser.stake(ethers.parseEther('1000'));
-console.log('[5] Staked 1000 CLAWD');
-
-await contractUser.register(commitment);
-console.log('[6] Registered commitment');
-
-const [treeSize, treeDepth, onChainRoot] = await contract.getTreeData();
-console.log(`   Tree: size=${treeSize}, depth=${treeDepth}, root=${onChainRoot.toString().slice(0,20)}...`);
-
-// ─── Rebuild merkle tree in JS (same as API server) ─────────────────────────
-// Get all leaves from events
-console.log('\n[7] Rebuilding merkle tree in JS...');
-const events = await contract.queryFilter(contract.filters.CreditRegistered());
-const leaves = events.map(e => e.args.commitment);
-console.log(`   ${leaves.length} leaf/leaves`);
-
-// Semaphore-style incremental tree rebuild (same as API server will do)
-// Get zero hashes from contract
-const zeros = [];
-for (let i = 0; i < 16; i++) zeros.push(await contract.zeros(i));
-
-// Recompute tree: insert leaves one by one, track filledNodes
+// Insert 5 leaves and verify root + path for each
+const credentials = [];
 const filledNodes = new Array(16).fill(0n);
-let computedSize = 0;
+let treeSize = 0;
+const leaves = [];
 
-for (const leaf of leaves) {
-  const index = computedSize;
-  let node = leaf;
+console.log('\n[5] Inserting 5 leaves, verifying root + path after each...');
+
+for (let n = 0; n < 5; n++) {
+  const nullifier = BigInt('0x' + randomBytes(31).toString('hex'));
+  const secret = BigInt('0x' + randomBytes(31).toString('hex'));
+  const commitment = frToBigInt(await bb.poseidon2Hash([new Fr(nullifier), new Fr(secret)]));
+  const nullifierHash = frToBigInt(await bb.poseidon2Hash([new Fr(nullifier)]));
+  credentials.push({ nullifier, secret, commitment, nullifierHash });
+
+  // Register on-chain
+  await au.register(commitment);
+  const [, treeDepthBN, onChainRoot] = await contract.getTreeData();
+  const treeDepth = Number(treeDepthBN);
+
+  // Update JS tree state (simulate Solidity insert)
+  const index = treeSize;
+  let node = commitment;
   for (let i = 0; i < 16; i++) {
-    if (((index >> i) & 1) === 0) {
-      filledNodes[i] = node;
-      break;
-    } else {
-      const h = await bb.poseidon2Hash([new Fr(filledNodes[i]), new Fr(node)]);
-      node = frToBigInt(h);
+    if (((index >> i) & 1) === 0) { filledNodes[i] = node; break; }
+    else { node = await p2(bb, filledNodes[i], node); }
+  }
+  treeSize++;
+  leaves.push(commitment);
+
+  // Verify JS depth matches contract depth
+  const jsDepth = computeDepth(treeSize);
+  if (jsDepth !== treeDepth) {
+    console.error(`   ❌ depth mismatch: js=${jsDepth} contract=${treeDepth}`); process.exit(1);
+  }
+
+  // Compute JS root
+  const jsRoot = await computeRoot(bb, filledNodes, onChainZeros, treeSize);
+  const rootMatch = jsRoot === onChainRoot;
+  process.stdout.write(`   leaf[${n}] depth=${treeDepth} root:${rootMatch ? '✅' : '❌'} `);
+  if (!rootMatch) { console.error('\n   JS:', jsRoot.toString()); console.error('   Chain:', onChainRoot.toString()); process.exit(1); }
+
+  // Build level nodes for path extraction
+  const levelNodes = [{}];
+  for (let i = 0; i < leaves.length; i++) levelNodes[0][i] = leaves[i];
+  for (let level = 0; level < treeDepth; level++) {
+    levelNodes[level + 1] = {};
+    const cnt = Math.ceil(treeSize / (1 << (level + 1)));
+    for (let i = 0; i < cnt; i++) {
+      const l = levelNodes[level][i * 2], r = levelNodes[level][i * 2 + 1];
+      if (l !== undefined && r !== undefined) levelNodes[level + 1][i] = await p2(bb, l, r);
+      else if (l !== undefined) levelNodes[level + 1][i] = await p2(bb, l, onChainZeros[level]);
     }
   }
-  computedSize++;
-}
 
-// Compute root from filledNodes
-let jsRoot = 0n;
-let hasNode = false;
-for (let i = 0; i < 16; i++) {
-  const bitSet = ((computedSize >> i) & 1) === 1;
-  if (bitSet) {
-    if (!hasNode) { jsRoot = filledNodes[i]; hasNode = true; }
-    else {
-      const h = await bb.poseidon2Hash([new Fr(filledNodes[i]), new Fr(jsRoot)]);
-      jsRoot = frToBigInt(h);
-    }
-  } else if (hasNode) {
-    const h = await bb.poseidon2Hash([new Fr(jsRoot), new Fr(zeros[i])]);
-    jsRoot = frToBigInt(h);
+  // Extract path for this leaf
+  const siblings = [], indices = [];
+  let cur = n;
+  for (let i = 0; i < 16; i++) {
+    if (i < treeDepth) {
+      const sibIdx = cur % 2 === 0 ? cur + 1 : cur - 1;
+      siblings.push(levelNodes[i][sibIdx] ?? onChainZeros[i]);
+      indices.push(cur % 2);
+      cur = Math.floor(cur / 2);
+    } else { siblings.push(onChainZeros[i]); indices.push(0); }
   }
+
+  // Verify path (binary_merkle_root: hash exactly `treeDepth` times)
+  let pathNode = commitment;
+  for (let i = 0; i < treeDepth; i++) {
+    pathNode = indices[i] === 0
+      ? await p2(bb, pathNode, siblings[i])
+      : await p2(bb, siblings[i], pathNode);
+  }
+  const pathMatch = pathNode === onChainRoot;
+  console.log(`path:${pathMatch ? '✅' : '❌'}`);
+  if (!pathMatch) { console.error('   Path root:', pathNode.toString()); console.error('   Expected:', onChainRoot.toString()); process.exit(1); }
 }
 
-console.log(`   JS root:      ${jsRoot.toString().slice(0,20)}...`);
-console.log(`   On-chain root: ${onChainRoot.toString().slice(0,20)}...`);
-console.log(`   Root match: ${jsRoot === onChainRoot ? '✅' : '❌ MISMATCH'}`);
-if (jsRoot !== onChainRoot) { await bb.destroy(); process.exit(1); }
+// Generate ZK proof for leaf 4
+console.log('\n[6] Generating ZK proof for leaf 4 (depth=3)...');
+const cred = credentials[4];
+const [, finalDepthBN, finalRoot] = await contract.getTreeData();
+const finalDepth = Number(finalDepthBN);
 
-// ─── Extract merkle path ─────────────────────────────────────────────────────
-console.log('\n[8] Extracting merkle path...');
-const leafIndex = leaves.findIndex(l => l === commitment);
-console.log(`   Leaf index: ${leafIndex}`);
-
-// Rebuild full tree level-by-level to extract siblings
 const levelNodes = [{}];
 for (let i = 0; i < leaves.length; i++) levelNodes[0][i] = leaves[i];
-
-const depth = Number(treeDepth);
-for (let level = 0; level < depth; level++) {
+for (let level = 0; level < finalDepth; level++) {
   levelNodes[level + 1] = {};
-  const nodesAtLevel = Math.ceil(computedSize / (1 << (level + 1)));
-  for (let i = 0; i < nodesAtLevel; i++) {
-    const left = levelNodes[level][i * 2];
-    const right = levelNodes[level][i * 2 + 1];
-    if (left !== undefined && right !== undefined) {
-      const h = await bb.poseidon2Hash([new Fr(left), new Fr(right)]);
-      levelNodes[level + 1][i] = frToBigInt(h);
-    } else if (left !== undefined) {
-      // Right sibling is zero hash — hash with it (standard binary tree, NOT LeanIMT promotion)
-      const h = await bb.poseidon2Hash([new Fr(left), new Fr(zeros[level])]);
-      levelNodes[level + 1][i] = frToBigInt(h);
-    }
+  const cnt = Math.ceil(treeSize / (1 << (level + 1)));
+  for (let i = 0; i < cnt; i++) {
+    const l = levelNodes[level][i * 2], r = levelNodes[level][i * 2 + 1];
+    if (l !== undefined && r !== undefined) levelNodes[level + 1][i] = await p2(bb, l, r);
+    else if (l !== undefined) levelNodes[level + 1][i] = await p2(bb, l, onChainZeros[level]);
   }
 }
 
-const siblings = [];
-const indices = [];
-let currentIndex = leafIndex;
+const siblings = [], indices = [];
+let cur = 4;
 for (let i = 0; i < 16; i++) {
-  if (i < depth) {
-    const siblingIndex = currentIndex % 2 === 0 ? currentIndex + 1 : currentIndex - 1;
-    siblings.push(levelNodes[i][siblingIndex] ?? zeros[i]);
-    indices.push(currentIndex % 2);
-    currentIndex = Math.floor(currentIndex / 2);
-  } else {
-    siblings.push(zeros[i]);
-    indices.push(0);
-  }
+  if (i < finalDepth) {
+    const sibIdx = cur % 2 === 0 ? cur + 1 : cur - 1;
+    siblings.push(levelNodes[i][sibIdx] ?? onChainZeros[i]);
+    indices.push(cur % 2);
+    cur = Math.floor(cur / 2);
+  } else { siblings.push(onChainZeros[i]); indices.push(0); }
 }
 
-// ─── Verify path manually (binary_merkle_root logic) ────────────────────────
-console.log('\n[9] Verifying merkle path (binary_merkle_root logic)...');
-let node = commitment;
-for (let i = 0; i < depth; i++) {
-  const sibling = siblings[i];
-  let left, right;
-  if (indices[i] === 0) { left = node; right = sibling; }
-  else { left = sibling; right = node; }
-  const h = await bb.poseidon2Hash([new Fr(left), new Fr(right)]);
-  node = frToBigInt(h);
-}
-console.log(`   Path root:     ${node.toString().slice(0,20)}...`);
-console.log(`   On-chain root: ${onChainRoot.toString().slice(0,20)}...`);
-console.log(`   Path match: ${node === onChainRoot ? '✅' : '❌ MISMATCH'}`);
-if (node !== onChainRoot) { await bb.destroy(); process.exit(1); }
-
-// ─── Generate ZK proof ───────────────────────────────────────────────────────
-console.log('\n[10] Generating ZK proof (this takes ~60s)...');
 const circuit = JSON.parse(fs.readFileSync(
   '/Users/austingriffith/clawd/zk-api-credits/packages/circuits/target/circuits.json', 'utf-8'
 ));
 const backend = new UltraHonkBackend(circuit.bytecode);
 const noir = new Noir(circuit);
 
+process.stdout.write('   Executing witness... ');
 const { witness } = await noir.execute({
-  nullifier_hash: nullifierHash.toString(),
-  root: onChainRoot.toString(),
-  depth: depth,
-  nullifier: nullifier.toString(),
-  secret: secret.toString(),
+  nullifier_hash: cred.nullifierHash.toString(),
+  root: finalRoot.toString(),
+  depth: finalDepth,
+  nullifier: cred.nullifier.toString(),
+  secret: cred.secret.toString(),
   indices: indices.map(String),
   siblings: siblings.map(String),
 });
-console.log('   Witness ✅');
+console.log('✅');
 
+process.stdout.write('   Generating proof... ');
 const { proof, publicInputs } = await backend.generateProof(witness);
-console.log(`   Proof generated (${proof.length} bytes) ✅`);
+console.log(`✅ (${proof.length} bytes)`);
 
-// ─── Verify proof ────────────────────────────────────────────────────────────
-console.log('\n[11] Verifying proof with bb.js...');
-const verified = await backend.verifyProof({ proof, publicInputs });
-console.log(`   Proof valid: ${verified ? '✅' : '❌'}`);
-if (!verified) { await bb.destroy(); process.exit(1); }
+process.stdout.write('   Verifying proof... ');
+const ok = await backend.verifyProof({ proof, publicInputs });
+console.log(ok ? '✅' : '❌');
+if (!ok) { await bb.destroy(); process.exit(1); }
 
-// ─── All checks pass ─────────────────────────────────────────────────────────
 console.log('\n' + '='.repeat(60));
 console.log('✅ ALL CHECKS PASSED');
-console.log('   - Zero hashes match between contract and bb.js');
-console.log('   - JS root matches on-chain root');
-console.log('   - Merkle path verifies correctly (binary_merkle_root)');
-console.log('   - ZK proof generates and verifies successfully');
+console.log('   ✅ Zero hashes match (contract = bb.js)');
+console.log('   ✅ Root matches on-chain for 1, 2, 3, 4, 5 leaves');
+console.log('   ✅ Merkle paths verify for all 5 leaves');
+console.log('   ✅ ZK proof generates and verifies (leaf 4, depth 3)');
 console.log('='.repeat(60));
-console.log('\nSafe to deploy to mainnet. 🚀');
+console.log('\n🚀 SAFE TO DEPLOY TO MAINNET\n');
 
 await bb.destroy();

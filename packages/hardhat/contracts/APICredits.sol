@@ -158,49 +158,6 @@ contract APICredits is Ownable {
         emit CreditRegistered(msg.sender, index, _commitment, stakedBalance[msg.sender]);
     }
 
-    function registerBatch(uint256[] calldata _commitments) external {
-        uint256 totalCost = _commitments.length * PRICE_PER_CREDIT;
-        if (stakedBalance[msg.sender] < totalCost) revert APICredits__InsufficientStake();
-        if (treeSize + _commitments.length > (1 << MAX_DEPTH)) revert APICredits__TreeFull();
-
-        for (uint256 c = 0; c < _commitments.length; c++) {
-            uint256 commitment = _commitments[c];
-            if (commitmentUsed[commitment]) revert APICredits__CommitmentAlreadyUsed(commitment);
-
-            stakedBalance[msg.sender] -= PRICE_PER_CREDIT;
-            serverClaimable += PRICE_PER_CREDIT;
-            commitmentUsed[commitment] = true;
-
-            uint256 index = treeSize;
-
-            // Update depth
-            {
-                uint256 newSize2 = treeSize + 1;
-                uint256 needed2 = 0;
-                uint256 tmp2 = newSize2;
-                while (tmp2 > 1) { needed2++; tmp2 = (tmp2 + 1) >> 1; }
-                if (needed2 > depth) depth = needed2;
-            }
-
-            // Insert
-            uint256 node = commitment;
-            for (uint256 i = 0; i < MAX_DEPTH; i++) {
-                if ((index >> i) & 1 == 0) {
-                    filledNodes[i] = node;
-                    break;
-                } else {
-                    node = _poseidon2Hash(filledNodes[i], node);
-                }
-            }
-
-            root = _computeRoot(treeSize + 1);
-            treeSize++;
-
-            emit NewLeaf(index, commitment);
-            emit CreditRegistered(msg.sender, index, commitment, stakedBalance[msg.sender]);
-        }
-    }
-
     // ─── Root Computation ─────────────────────────────────────
 
     function _computeRoot(uint256 size) internal view returns (uint256) {

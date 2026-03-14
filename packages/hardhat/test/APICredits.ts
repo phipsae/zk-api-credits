@@ -159,31 +159,6 @@ describe("APICredits", function () {
     });
   });
 
-  describe("registerBatch()", function () {
-    beforeEach(async function () {
-      await mockClawd.connect(user1).approve(await apiCredits.getAddress(), STAKE_AMOUNT);
-      await apiCredits.connect(user1).stake(STAKE_AMOUNT);
-    });
-
-    it("should register multiple commitments in one tx", async function () {
-      const commitments = [100n, 200n, 300n];
-      await apiCredits.connect(user1).registerBatch(commitments);
-
-      expect(await apiCredits.serverClaimable()).to.equal(PRICE_PER_CREDIT * 3n);
-      for (const c of commitments) {
-        expect(await apiCredits.isCommitmentUsed(c)).to.equal(true);
-      }
-    });
-
-    it("should revert if total cost exceeds balance", async function () {
-      // Try to register 11 commitments (11000 CLAWD) with only 10000 staked
-      const tooMany = Array.from({ length: 11 }, (_, i) => BigInt(i + 1000));
-      await expect(apiCredits.connect(user1).registerBatch(tooMany)).to.be.revertedWithCustomError(
-        apiCredits,
-        "APICredits__InsufficientStake",
-      );
-    });
-  });
 
   describe("claimServer()", function () {
     beforeEach(async function () {
