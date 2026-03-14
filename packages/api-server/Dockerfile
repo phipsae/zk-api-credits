@@ -1,13 +1,14 @@
+# Build from monorepo root: docker build -f packages/api-server/Dockerfile .
 # ── Build stage ─────────────────────────────────────────────
 FROM node:22-slim AS builder
 
 WORKDIR /app
 
-COPY package.json ./
+COPY packages/api-server/package.json ./
 RUN npm install
 
-COPY tsconfig.json ./
-COPY src/ ./src/
+COPY packages/api-server/tsconfig.json ./
+COPY packages/api-server/src/ ./src/
 
 RUN npm run build
 
@@ -16,15 +17,14 @@ FROM node:22-slim
 
 WORKDIR /app
 
-COPY package.json ./
+COPY packages/api-server/package.json ./
 RUN npm install --omit=dev
 
 COPY --from=builder /app/dist ./dist
 
-# Circuit artifacts (verification key + compiled circuit)
-# Mount or copy these at runtime if verifying proofs server-side
-# COPY ../circuits/target/vk ./circuits/vk
-# COPY ../circuits/target/circuits.json ./circuits/circuits.json
+# Circuit artifacts — copied from monorepo at build time
+COPY packages/circuits/target/vk ./circuits/target/vk
+COPY packages/circuits/target/circuits.json ./circuits/target/circuits.json
 
 ENV NODE_ENV=production
 ENV PORT=3001
