@@ -190,43 +190,76 @@ app.get("/merkle-path/:commitment", async (req, res) => {
 
     const numLeaves = leaves.length;
 
-    // Compute tree depth (same as contract)
-    let treeDepth = 1;
+    // Compute tree depth — matches contract exactly:
+    // 1 leaf → depth 0 (root IS the leaf, no hashing)
+    // 2 leaves → depth 1, 3-4 → depth 2, 5-8 → depth 3, etc.
+    let treeDepth = 0;
     {
       let tmp = numLeaves;
-      let needed = 0;
       while (tmp > 1) {
-        needed++;
-        tmp = (tmp + 1) >> 1;
+        treeDepth++;
+        tmp = Math.ceil(tmp / 2);
       }
-      if (needed > 0) treeDepth = needed;
     }
 
-    // Build the full binary tree level by level.
-    // Level 0 = leaves, padded with 0 for empty slots.
-    // Level i+1[j] = hash(level_i[2j], level_i[2j+1])
-    // When a node is missing (beyond numLeaves at level 0), use zeros[level].
-    const levels: bigint[][] = [];
+    // Build the full binary tree level by level using incremental filledNodes logic
+    // to match _computeRoot in the contract exactly.
+    //
+    // We simulate the Semaphore-style insert for all leaves to get filledNodes,
+    // then compute the root the same way _computeRoot does.
+    const filledNodes: bigint[] = new Array(MAX_DEPTH).fill(0n);
+    for (let li = 0; li < numLeaves; li++) {
+      let node = leaves[li];
+      for (let i = 0; i < MAX_DEPTH; i++) {
+        if (((li >> i) & 1) === 0) {
+          filledNodes[i] = node;
+          break;
+        } else {
+          node = await poseidon2Hash(filledNodes[i], node);
+        }
+      }
+    }
 
-    // Level 0: all leaves + padding
-    const level0Size = 1 << treeDepth; // 2^depth
+    // _computeRoot logic
+    let treeRoot: bigint;
+    {
+      let node = 0n;
+      let nodeLevel = -1;
+      let hasNode = false;
+      for (let i = 0; i < MAX_DEPTH; i++) {
+        if (((numLeaves >> i) & 1) === 1) {
+          if (!hasNode) {
+            node = filledNodes[i];
+            nodeLevel = i;
+            hasNode = true;
+          } else {
+            for (let lvl = nodeLevel; lvl < i; lvl++) {
+              node = await poseidon2Hash(node, zeros[lvl]);
+            }
+            node = await poseidon2Hash(filledNodes[i], node);
+            nodeLevel = i + 1;
+          }
+        }
+      }
+      treeRoot = node;
+    }
+
+    // Also build level-by-level tree for sibling extraction
+    // Use treeDepth levels, pad right side with zeros[level]
+    const levels: bigint[][] = [];
+    // Level 0: leaves, right-padded with zeros[0]=0
+    const level0Size = treeDepth === 0 ? 1 : (1 << treeDepth);
     levels[0] = new Array(level0Size);
     for (let i = 0; i < level0Size; i++) {
-      levels[0][i] = i < numLeaves ? leaves[i] : 0n; // 0 = zeros[0]
+      levels[0][i] = i < numLeaves ? leaves[i] : zeros[0];
     }
-
-    // Build upper levels
     for (let lvl = 0; lvl < treeDepth; lvl++) {
       const parentSize = levels[lvl].length >> 1;
       levels[lvl + 1] = new Array(parentSize);
       for (let j = 0; j < parentSize; j++) {
-        const left = levels[lvl][j * 2];
-        const right = levels[lvl][j * 2 + 1];
-        levels[lvl + 1][j] = await poseidon2Hash(left, right);
+        levels[lvl + 1][j] = await poseidon2Hash(levels[lvl][j * 2], levels[lvl][j * 2 + 1]);
       }
     }
-
-    const treeRoot = levels[treeDepth][0];
 
     // Extract sibling path for the target leaf
     const siblings: string[] = [];
