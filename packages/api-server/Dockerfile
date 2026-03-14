@@ -28,6 +28,8 @@ COPY packages/circuits/target/circuits.json ./circuits/target/circuits.json
 
 ENV NODE_ENV=production
 ENV PORT=3001
+ENV CIRCUIT_PATH=/app/circuits/target/circuits.json
+ENV VK_PATH=/app/circuits/target/vk
 
 EXPOSE 3001
 
