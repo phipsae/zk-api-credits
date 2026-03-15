@@ -1,5 +1,8 @@
 # ZK API Credits
 
+![ZK API Credits](./banner.jpg)
+
+
 **Private, anonymous LLM API access using zero-knowledge proofs.**
 
 Stake CLAWD → register a commitment → generate a ZK proof → call any LLM API without revealing your identity.
