@@ -61,30 +61,217 @@ const API_CREDITS_ABI = parseAbi([
   "function getTreeData() view returns (uint256 size, uint256 depth, uint256 root)",
 ]);
 
-let cachedRoot: string | null = null;
-let cachedRootTimestamp = 0;
-const ROOT_CACHE_TTL_MS = 5000; // 5 seconds
+// ─── Historical Root Tracking (Privacy Fix) ───────────────────
+// PROBLEM: Accepting only the current onchain root creates a timing
+// correlation attack. When a new commitment is registered, the root
+// changes. Any proof generated against the old root is rejected,
+// forcing users to regenerate proofs immediately — which reveals
+// who they are in a low-traffic system.
+//
+// FIX: Maintain a rolling set of all historical Merkle roots.
+// Accept any proof against a root that existed within the last
+// VALID_ROOT_WINDOW blocks (~24h on Base). We replay all
+// CreditRegistered events on startup to build the full history,
+// then poll for new events to keep it updated.
 
-async function getOnChainRoot(): Promise<string | null> {
-  const now = Date.now();
-  if (cachedRoot !== null && now - cachedRootTimestamp < ROOT_CACHE_TTL_MS) {
-    return cachedRoot;
+const VALID_ROOT_WINDOW = 7200n; // ~24h on Base (2s block time)
+
+// root hex string → block number when it became the active root
+const validRoots = new Map<string, bigint>();
+
+// Persistent Semaphore-style tree state for incremental root computation.
+// This mirrors the contract's filledNodes array exactly.
+const treeFilledNodes: bigint[] = new Array(MAX_DEPTH).fill(0n);
+let treeSize = 0;
+
+// The latest (current) root — never pruned from the valid set
+let currentRoot: string | null = null;
+
+// Last block processed by the event watcher
+let lastProcessedBlock = 0n;
+
+function rootToHex(root: bigint): string {
+  return "0x" + root.toString(16).padStart(64, "0");
+}
+
+/**
+ * Compute the Merkle root from the current filledNodes state.
+ * Replicates the contract's _computeRoot logic exactly.
+ */
+async function computeRootFromFilledNodes(size: number): Promise<bigint> {
+  if (size === 0) return 0n;
+
+  let node = 0n;
+  let nodeLevel = -1;
+  let hasNode = false;
+
+  for (let i = 0; i < MAX_DEPTH; i++) {
+    if (((size >> i) & 1) === 1) {
+      if (!hasNode) {
+        node = treeFilledNodes[i];
+        nodeLevel = i;
+        hasNode = true;
+      } else {
+        for (let lvl = nodeLevel; lvl < i; lvl++) {
+          node = await poseidon2Hash(node, zeros[lvl]);
+        }
+        node = await poseidon2Hash(treeFilledNodes[i], node);
+        nodeLevel = i + 1;
+      }
+    }
   }
+
+  return node;
+}
+
+/**
+ * Insert a leaf into the incremental tree and return the new root.
+ * Replicates the contract's Semaphore-style _insert + _computeRoot.
+ */
+async function insertLeafAndGetRoot(commitment: bigint): Promise<bigint> {
+  let node = commitment;
+  for (let i = 0; i < MAX_DEPTH; i++) {
+    if (((treeSize >> i) & 1) === 0) {
+      treeFilledNodes[i] = node;
+      break;
+    } else {
+      node = await poseidon2Hash(treeFilledNodes[i], node);
+    }
+  }
+  treeSize++;
+  return computeRootFromFilledNodes(treeSize);
+}
+
+/**
+ * Prune roots older than VALID_ROOT_WINDOW blocks.
+ * The current root is never pruned.
+ */
+async function pruneOldRoots(): Promise<void> {
   try {
-    const [, , root] = await publicClient.readContract({
+    const currentBlock = await publicClient.getBlockNumber();
+    const cutoff = currentBlock > VALID_ROOT_WINDOW
+      ? currentBlock - VALID_ROOT_WINDOW
+      : 0n;
+    let pruned = 0;
+
+    for (const [root, blockNum] of validRoots) {
+      if (blockNum < cutoff && root !== currentRoot) {
+        validRoots.delete(root);
+        pruned++;
+      }
+    }
+
+    if (pruned > 0) {
+      console.log(
+        `Pruned ${pruned} roots older than block ${cutoff}. ${validRoots.size} remain.`
+      );
+    }
+  } catch (err) {
+    console.error("Error pruning old roots:", err);
+  }
+}
+
+/**
+ * Replay all CreditRegistered events to build the full set of historical roots.
+ * Each insertion produces a new root; we store every root with its block number.
+ */
+async function buildHistoricalRoots(): Promise<void> {
+  console.log("Building historical root set from CreditRegistered events...");
+
+  const events = await publicClient.getLogs({
+    address: CONTRACT_ADDRESS,
+    event: parseAbiItem(
+      "event CreditRegistered(address indexed user, uint256 indexed index, uint256 commitment, uint256 newStakedBalance)"
+    ),
+    fromBlock: 0n,
+  });
+
+  if (events.length === 0) {
+    console.log("No CreditRegistered events found.");
+    return;
+  }
+
+  // Sort by index to replay insertions in correct order
+  const sorted = events.sort(
+    (a, b) => Number(a.args.index!) - Number(b.args.index!)
+  );
+
+  for (const event of sorted) {
+    const root = await insertLeafAndGetRoot(event.args.commitment!);
+    const rootHex = rootToHex(root);
+    validRoots.set(rootHex, event.blockNumber);
+    currentRoot = rootHex;
+  }
+
+  // Verify our computed root matches the contract's current root
+  try {
+    const [, , contractRoot] = await publicClient.readContract({
       address: CONTRACT_ADDRESS,
       abi: API_CREDITS_ABI,
       functionName: "getTreeData",
     });
-    cachedRoot = "0x" + root.toString(16).padStart(64, "0");
-    cachedRootTimestamp = now;
-    return cachedRoot;
+    const contractRootHex = rootToHex(contractRoot);
+    if (currentRoot === contractRootHex) {
+      console.log(`✓ Computed root matches onchain: ${currentRoot}`);
+    } else {
+      console.error(
+        `✗ ROOT MISMATCH! Computed: ${currentRoot}, Onchain: ${contractRootHex}`
+      );
+    }
   } catch {
-    // Tree is empty or contract not deployed
-    cachedRoot = null;
-    cachedRootTimestamp = now;
-    return null;
+    console.log("Could not verify root against contract (may be empty).");
   }
+
+  console.log(
+    `Built ${validRoots.size} historical roots from ${events.length} events.`
+  );
+
+  // Prune roots outside the validity window
+  await pruneOldRoots();
+}
+
+/**
+ * Poll for new CreditRegistered events every 10 seconds.
+ * Updates the tree state and valid roots set incrementally.
+ */
+function startEventWatcher(): void {
+  setInterval(async () => {
+    try {
+      const currentBlock = await publicClient.getBlockNumber();
+      if (currentBlock <= lastProcessedBlock) return;
+
+      const events = await publicClient.getLogs({
+        address: CONTRACT_ADDRESS,
+        event: parseAbiItem(
+          "event CreditRegistered(address indexed user, uint256 indexed index, uint256 commitment, uint256 newStakedBalance)"
+        ),
+        fromBlock: lastProcessedBlock + 1n,
+        toBlock: currentBlock,
+      });
+
+      if (events.length > 0) {
+        const sorted = events.sort(
+          (a, b) => Number(a.args.index!) - Number(b.args.index!)
+        );
+        for (const event of sorted) {
+          const root = await insertLeafAndGetRoot(event.args.commitment!);
+          const rootHex = rootToHex(root);
+          validRoots.set(rootHex, event.blockNumber);
+          currentRoot = rootHex;
+          console.log(
+            `New root: ${rootHex} (block ${event.blockNumber}, index ${event.args.index})`
+          );
+        }
+      }
+
+      lastProcessedBlock = currentBlock;
+      await pruneOldRoots();
+    } catch (err) {
+      console.error("Event watcher error:", err);
+    }
+  }, 10_000);
+
+  console.log("Event watcher started (polling every 10s).");
 }
 
 // ─── Nullifier Persistence ────────────────────────────────────
@@ -113,20 +300,22 @@ app.use(express.json({ limit: "1mb" }));
 
 // Health check
 app.get("/health", async (_req, res) => {
-  const onChainRoot = await getOnChainRoot();
   res.json({
     status: "ok",
     spentNullifiers: spentNullifiers.size,
-    onChainRoot,
+    currentRoot,
+    validRoots: validRoots.size,
+    treeSize,
   });
 });
 
 // Get server stats
 app.get("/stats", async (_req, res) => {
-  const onChainRoot = await getOnChainRoot();
   res.json({
     spentNullifiers: spentNullifiers.size,
-    onChainRoot,
+    currentRoot,
+    validRoots: validRoots.size,
+    treeSize,
   });
 });
 
@@ -327,14 +516,18 @@ app.post("/v1/chat", async (req, res) => {
       return;
     }
 
-    // ─── Verify root matches on-chain state ─────────────────
-    const onChainRoot = await getOnChainRoot();
-    if (onChainRoot === null) {
+    // ─── Verify root is in the valid historical set ─────────
+    // Accept any root from the last ~24h of onchain state.
+    // This prevents timing correlation attacks — users don't need
+    // to regenerate proofs immediately after a new commitment.
+    if (validRoots.size === 0) {
       res.status(403).json({ error: "No commitments registered yet" });
       return;
     }
-    if (root !== onChainRoot) {
-      res.status(403).json({ error: "Invalid root — does not match on-chain state" });
+    if (!validRoots.has(root)) {
+      res.status(403).json({
+        error: "Invalid root — not in valid root set (may be expired or incorrect)",
+      });
       return;
     }
 
@@ -451,22 +644,36 @@ async function start() {
   // Precompute zero hashes (must happen after bb is initialized)
   await precomputeZeros();
 
-  app.listen(PORT, async () => {
-    const onChainRoot = await getOnChainRoot();
+  // Build historical root set from all past events
+  await buildHistoricalRoots();
+
+  // Record current block for incremental watching
+  try {
+    lastProcessedBlock = await publicClient.getBlockNumber();
+  } catch {
+    lastProcessedBlock = 0n;
+  }
+
+  // Start polling for new commitment events
+  startEventWatcher();
+
+  app.listen(PORT, () => {
     console.log(`\n🔐 ZK API Credits Server`);
     console.log(`   Port: ${PORT}`);
     console.log(`   Venice: ${VENICE_BASE_URL}`);
     console.log(`   VK: ${VK_PATH}`);
     console.log(`   Contract: ${CONTRACT_ADDRESS}`);
     console.log(`   RPC: ${RPC_URL}`);
-    console.log(`   On-chain root: ${onChainRoot || "(no commitments yet)"}`);
+    console.log(`   Current root: ${currentRoot || "(no commitments yet)"}`);
+    console.log(`   Valid roots: ${validRoots.size} (window: ${VALID_ROOT_WINDOW} blocks)`);
+    console.log(`   Tree size: ${treeSize} commitments`);
     console.log(`   Loaded nullifiers: ${spentNullifiers.size}`);
     console.log(`   Nullifier file: ${NULLIFIER_FILE}`);
     console.log(`   Hash function: bb.js Poseidon2 (Noir-compatible)`);
     console.log(`   Tree type: Standard binary with zero-padding (Semaphore-style)`);
     console.log(`\n   POST /v1/chat — Submit proof + get LLM response`);
-    console.log(`   GET  /health  — Server health`);
-    console.log(`   GET  /stats   — Spent nullifiers count`);
+    console.log(`   GET  /health  — Server health + valid roots count`);
+    console.log(`   GET  /stats   — Server stats`);
     console.log(`\n   No wallet. No API key. No identity.\n`);
   });
 }
