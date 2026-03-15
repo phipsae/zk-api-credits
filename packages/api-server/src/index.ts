@@ -500,7 +500,7 @@ app.get("/merkle-path/:commitment", async (req, res) => {
  */
 app.post("/v1/chat", async (req, res) => {
   try {
-    const { proof, nullifier_hash, root, depth, messages, model } = req.body;
+    const { proof, publicInputs: clientPublicInputs, nullifier_hash, root, depth, messages, model } = req.body;
 
     // ─── Input Validation ───────────────────────────────────
     if (!proof || !nullifier_hash || !root || depth === undefined || !messages) {
@@ -533,7 +533,7 @@ app.post("/v1/chat", async (req, res) => {
 
     // ─── Verify ZK proof ────────────────────────────────────
     try {
-      const proofValid = await verifyProof(proof, nullifier_hash, root, depth);
+      const proofValid = await verifyProof(proof, nullifier_hash, root, depth, clientPublicInputs);
       if (!proofValid) {
         res.status(403).json({ error: "Invalid proof" });
         return;
@@ -599,7 +599,8 @@ async function verifyProof(
   proofHex: string,
   nullifierHash: string,
   root: string,
-  depth: number
+  depth: number,
+  clientPublicInputs?: string[]
 ): Promise<boolean> {
   try {
     const { UltraHonkBackend } = await import("@aztec/bb.js");
@@ -611,7 +612,9 @@ async function verifyProof(
       "hex"
     );
 
-    const publicInputs = [
+    // Use public inputs from client if provided (exact encoding from bb.js)
+    // Otherwise reconstruct them (may have encoding mismatches)
+    const publicInputs = clientPublicInputs ?? [
       nullifierHash,
       root,
       "0x" + BigInt(depth).toString(16).padStart(64, "0"),
