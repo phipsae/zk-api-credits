@@ -105,7 +105,34 @@ contract APICredits is Ownable {
         clawdToken.safeTransfer(msg.sender, amount);
     }
 
+    /**
+     * @notice Stake CLAWD and register all credits in one transaction.
+     * @param amount  Total CLAWD to stake (must be multiple of PRICE_PER_CREDIT)
+     * @param commitments  One commitment per credit (length = amount / PRICE_PER_CREDIT)
+     */
+    function stakeAndRegister(uint256 amount, uint256[] calldata commitments) external {
+        if (amount == 0) revert APICredits__ZeroAmount();
+        uint256 numCredits = amount / PRICE_PER_CREDIT;
+        require(numCredits == commitments.length, "commitment count mismatch");
+        require(numCredits > 0, "amount too small");
+
+        // Transfer all CLAWD in one shot
+        clawdToken.safeTransferFrom(msg.sender, address(this), amount);
+        stakedBalance[msg.sender] += amount;
+        emit Staked(msg.sender, amount, stakedBalance[msg.sender]);
+
+        // Register each commitment
+        for (uint256 i = 0; i < numCredits; i++) {
+            _register(commitments[i]);
+        }
+    }
+
     function register(uint256 _commitment) external {
+        if (stakedBalance[msg.sender] < PRICE_PER_CREDIT) revert APICredits__InsufficientStake();
+        _register(_commitment);
+    }
+
+    function _register(uint256 _commitment) internal {
         if (stakedBalance[msg.sender] < PRICE_PER_CREDIT) revert APICredits__InsufficientStake();
         if (commitmentUsed[_commitment]) revert APICredits__CommitmentAlreadyUsed(_commitment);
         if (treeSize >= (1 << MAX_DEPTH)) revert APICredits__TreeFull();

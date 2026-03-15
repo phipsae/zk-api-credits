@@ -17,7 +17,7 @@ const { ethers } = await import('/Users/austingriffith/clawd/zk-api-credits/pack
 const CONTRACT = '0x45284835Fe6eC9937Ce8db8AEE32F3E684f900F3';
 const CLAWD    = '0x9f86dB9fc6f7c9408e8Fda3Ff8ce4e78ac7a6b07';
 const RPC      = 'https://base-mainnet.g.alchemy.com/v2/8GVG8WjDs-sGFRr6Rm839';
-const API      = 'http://localhost:3003';
+const API      = 'https://backend.zkllmapi.com';
 
 const frToBigInt = (fr) => BigInt('0x' + Buffer.from(fr.value).toString('hex'));
 const p2 = async (bb, a, b) => frToBigInt(await bb.poseidon2Hash([new Fr(a), new Fr(b)]));
