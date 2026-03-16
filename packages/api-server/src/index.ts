@@ -495,7 +495,7 @@ app.get("/merkle-path/:commitment", async (req, res) => {
  *   "root": "0x...",
  *   "depth": 16,
  *   "messages": [{ "role": "user", "content": "..." }],
- *   "model": "llama-3.3-70b"
+ *   "model": "hermes-3-llama-3.1-405b"
  * }
  */
 app.post("/v1/chat", async (req, res) => {
@@ -561,7 +561,7 @@ app.post("/v1/chat", async (req, res) => {
             Authorization: `Bearer ${VENICE_API_KEY}`,
           },
           body: JSON.stringify({
-            model: model || "llama-3.3-70b",
+            model: model || "hermes-3-llama-3.1-405b",
             messages,
             stream: false,
           }),
