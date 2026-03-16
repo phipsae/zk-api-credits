@@ -107,7 +107,7 @@ contract CLAWDRouter is Ownable {
     ) external {
         if (commitments.length == 0) revert CLAWDRouter__ZeroCommitments();
 
-        uint256 totalCLAWD = apiCredits.pricePerCredit() * commitments.length;
+        uint256 totalCLAWD = pricing.getCreditPriceInCLAWD() * commitments.length;
         if (maxCLAWD < totalCLAWD) revert CLAWDRouter__InsufficientOutput();
 
         // Pull CLAWD from user
@@ -133,7 +133,7 @@ contract CLAWDRouter is Ownable {
     ) external payable {
         if (commitments.length == 0) revert CLAWDRouter__ZeroCommitments();
 
-        uint256 totalCLAWD = apiCredits.pricePerCredit() * commitments.length;
+        uint256 totalCLAWD = pricing.getCreditPriceInCLAWD() * commitments.length;
 
         // Wrap ETH → WETH, then swap WETH → CLAWD
         IWETH(address(weth)).deposit{value: msg.value}();
@@ -180,7 +180,7 @@ contract CLAWDRouter is Ownable {
     ) external {
         if (commitments.length == 0) revert CLAWDRouter__ZeroCommitments();
 
-        uint256 totalCLAWD = apiCredits.pricePerCredit() * commitments.length;
+        uint256 totalCLAWD = pricing.getCreditPriceInCLAWD() * commitments.length;
 
         // Pull USDC from user
         usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
@@ -236,17 +236,14 @@ contract CLAWDRouter is Ownable {
 
     /**
      * @notice Get the CLAWD amount needed for N credits (from TWAP oracle).
-     * @dev This is a convenience view — the actual amount charged uses
-     *      apiCredits.pricePerCredit() which is the static contract rate.
-     *      The TWAP price from CLAWDPricing is for frontend USD display.
+     * @dev Uses the live oracle price — same as what buy functions charge.
      */
     function quoteCredits(uint256 numCredits)
         external
         view
         returns (uint256 clawdNeeded, uint256 usdEquivalent)
     {
-        clawdNeeded = apiCredits.pricePerCredit() * numCredits;
-        // USD equivalent from pricing oracle
+        clawdNeeded = pricing.getCreditPriceInCLAWD() * numCredits;
         (,,, uint256 usdPerCredit,) = pricing.getOracleData();
         usdEquivalent = usdPerCredit * numCredits;
     }

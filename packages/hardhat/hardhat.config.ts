@@ -119,7 +119,7 @@ const config: HardhatUserConfig = {
       ]
     },
     base: {
-      url: 'https://mainnet.base.org',
+      url: `https://base-mainnet.g.alchemy.com/v2/${providerApiKey}`,
       accounts: [
         deployerPrivateKey
       ]

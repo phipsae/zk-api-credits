@@ -39,7 +39,9 @@ contract APICredits is Ownable {
 
     // ─── Immutables ───────────────────────────────────────────
     IERC20 public immutable paymentToken;
-    uint256 public immutable pricePerCredit;
+
+    // ─── Mutable pricing ─────────────────────────────────────
+    uint256 public pricePerCredit;
 
     // ─── State ────────────────────────────────────────────────
     mapping(address => uint256) public stakedBalance;
@@ -116,9 +118,8 @@ contract APICredits is Ownable {
      */
     function stakeAndRegister(uint256 amount, uint256[] calldata commitments) external {
         if (amount == 0) revert APICredits__ZeroAmount();
-        uint256 numCredits = amount / pricePerCredit;
-        require(numCredits == commitments.length, "commitment count mismatch");
-        require(numCredits > 0, "amount too small");
+        require(commitments.length > 0, "no commitments");
+        require(amount >= pricePerCredit * commitments.length, "amount too small");
 
         // Transfer all tokens in one shot
         paymentToken.safeTransferFrom(msg.sender, address(this), amount);
@@ -126,7 +127,7 @@ contract APICredits is Ownable {
         emit Staked(msg.sender, amount, stakedBalance[msg.sender]);
 
         // Register each commitment
-        for (uint256 i = 0; i < numCredits; i++) {
+        for (uint256 i = 0; i < commitments.length; i++) {
             _register(commitments[i]);
         }
     }
@@ -217,6 +218,14 @@ contract APICredits is Ownable {
         serverClaimable -= amount;
         emit ServerClaimed(to, amount);
         paymentToken.safeTransfer(to, amount);
+    }
+
+    /**
+     * @notice Update the price per credit. Owner only.
+     */
+    function setPricePerCredit(uint256 newPrice) external onlyOwner {
+        require(newPrice > 0, "zero price");
+        pricePerCredit = newPrice;
     }
 
     // ─── View Functions ───────────────────────────────────────
