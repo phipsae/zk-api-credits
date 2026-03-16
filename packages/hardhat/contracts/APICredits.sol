@@ -112,23 +112,23 @@ contract APICredits is Ownable {
     }
 
     /**
-     * @notice Stake tokens and register all credits in one transaction.
-     * @param amount  Total tokens to stake (must cover pricePerCredit * commitments.length)
+     * @notice Pay tokens and register commitments in one transaction.
+     * @dev All tokens go directly to serverClaimable — the caller (usually CLAWDRouter)
+     *      is responsible for sending the correct amount. No pricePerCredit check here.
+     * @param amount  Total tokens to pay
      * @param commitments  One commitment per credit
      */
     function stakeAndRegister(uint256 amount, uint256[] calldata commitments) external {
         if (amount == 0) revert APICredits__ZeroAmount();
         require(commitments.length > 0, "no commitments");
-        require(amount >= pricePerCredit * commitments.length, "amount too small");
 
-        // Transfer all tokens in one shot
+        // Transfer tokens and move directly to server-claimable pool
         paymentToken.safeTransferFrom(msg.sender, address(this), amount);
-        stakedBalance[msg.sender] += amount;
-        emit Staked(msg.sender, amount, stakedBalance[msg.sender]);
+        serverClaimable += amount;
 
-        // Register each commitment
+        // Register each commitment (no balance check — payment already handled)
         for (uint256 i = 0; i < commitments.length; i++) {
-            _register(commitments[i]);
+            _registerDirect(commitments[i]);
         }
     }
 
@@ -146,10 +146,21 @@ contract APICredits is Ownable {
         stakedBalance[msg.sender] -= pricePerCredit;
         serverClaimable += pricePerCredit;
 
-        // Mark commitment as used
         commitmentUsed[_commitment] = true;
+        _insertLeaf(_commitment);
+    }
 
-        // Insert into incremental Merkle tree
+    /// @dev Register a commitment without balance checks (used by stakeAndRegister where payment is pre-handled)
+    function _registerDirect(uint256 _commitment) internal {
+        if (commitmentUsed[_commitment]) revert APICredits__CommitmentAlreadyUsed(_commitment);
+        if (treeSize >= (1 << MAX_DEPTH)) revert APICredits__TreeFull();
+
+        commitmentUsed[_commitment] = true;
+        _insertLeaf(_commitment);
+    }
+
+    /// @dev Insert a leaf into the incremental Merkle tree
+    function _insertLeaf(uint256 _commitment) internal {
         uint256 index = treeSize;
 
         // Update depth
