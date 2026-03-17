@@ -36,9 +36,8 @@ async function precomputeZeros() {
 
 // ─── Configuration ────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
-const VENICE_API_KEY =
-  process.env.VENICE_API_KEY ||
-  "VENICE_INFERENCE_KEY_KGq6jatZVf4-daQeEzsDwilsVcnef8T0mC77mu7d3B";
+const VENICE_API_KEY = process.env.VENICE_API_KEY as string;
+if (!VENICE_API_KEY) throw new Error("VENICE_API_KEY is required — set it in packages/api-server/.env");
 const VENICE_BASE_URL =
   process.env.VENICE_BASE_URL || "https://api.venice.ai/api/v1";
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS as `0x${string}`;
