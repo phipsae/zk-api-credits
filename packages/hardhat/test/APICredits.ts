@@ -243,7 +243,7 @@ describe("APICredits", function () {
 
       const [size, depth] = await apiCredits.getTreeData();
       expect(size).to.equal(2);
-      expect(depth).to.equal(1);
+      expect(depth).to.equal(16); // imt.sol uses fixed depth set at init
     });
   });
 
