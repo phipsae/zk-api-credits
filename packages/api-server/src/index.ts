@@ -297,15 +297,8 @@ function saveNullifier(hash: string) {
 const spentNullifiers = loadNullifiers();
 const pendingNullifiers = new Set<string>();
 
-// ─── Model Allowlist ──────────────────────────────────────────
-const ALLOWED_MODELS = new Set([
-  "hermes-3-llama-3.1-405b",
-  "llama-3.3-70b",
-  "kimi-k2-thinking",
-  "qwen3-235b-a22b-thinking-2507",
-  "deepseek-v3.2",
-]);
-const DEFAULT_MODEL = "hermes-3-llama-3.1-405b";
+// ─── Model (locked for demo — one credit, one model) ─────────
+const MODEL = "hermes-3-llama-3.1-405b";
 
 // ─── Express App ──────────────────────────────────────────────
 const app = express();
@@ -432,7 +425,7 @@ app.get("/tree", async (_req, res) => {
  * }
  */
 app.post("/v1/chat", async (req, res) => {
-  const { proof, publicInputs: clientPublicInputs, nullifier_hash, root, depth, messages, model: requestedModel } = req.body;
+  const { proof, publicInputs: clientPublicInputs, nullifier_hash, root, depth, messages } = req.body;
 
   // ─── Input Validation ───────────────────────────────────
   if (!proof || !nullifier_hash || !root || depth === undefined || !messages) {
@@ -466,9 +459,6 @@ app.post("/v1/chat", async (req, res) => {
       return;
     }
 
-    // ─── Resolve model from allowlist ───────────────────────
-    const model = (requestedModel && ALLOWED_MODELS.has(requestedModel)) ? requestedModel : DEFAULT_MODEL;
-
     // ─── Verify ZK proof ────────────────────────────────────
     try {
       const proofValid = await verifyProof(proof, nullifier_hash, root, depth, clientPublicInputs);
@@ -499,7 +489,7 @@ app.post("/v1/chat", async (req, res) => {
             Authorization: `Bearer ${VENICE_API_KEY}`,
           },
           body: JSON.stringify({
-            model,
+            model: MODEL,
             messages,
             stream: false,
           }),

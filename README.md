@@ -57,15 +57,11 @@ The ZK proof breaks the link between the wallet that paid and the API call. The 
 
 ---
 
-## Supported Models
+## Model
 
-- `hermes-3-llama-3.1-405b` (default)
-- `llama-3.3-70b`
-- `kimi-k2-thinking`
-- `qwen3-235b-a22b-thinking-2507`
-- `deepseek-v3.2`
+`hermes-3-llama-3.1-405b` — 405B open-weight, run on [Venice AI](https://venice.ai/) with private inference.
 
-All models run on [Venice AI](https://venice.ai/) with private inference.
+Model is fixed: **one credit = one call to this model.** Additional models may be added in the future.
 
 ---
 
@@ -93,8 +89,7 @@ curl -X POST https://backend.zkllmapi.com/v1/chat \
     "nullifier_hash": "0x...",
     "root": "0x...",
     "depth": 16,
-    "messages": [{ "role": "user", "content": "What is Ethereum?" }],
-    "model": "llama-3.3-70b"
+    "messages": [{ "role": "user", "content": "What is Ethereum?" }]
   }'
 ```
 
@@ -135,8 +130,7 @@ Submit a ZK proof and get an LLM response.
   "nullifier_hash": "0x...",
   "root": "0x...",
   "depth": 16,
-  "messages": [{ "role": "user", "content": "..." }],
-  "model": "llama-3.3-70b"
+  "messages": [{ "role": "user", "content": "..." }]
 }
 ```
 
