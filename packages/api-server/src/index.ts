@@ -537,7 +537,6 @@ app.post("/v1/chat", async (req, res) => {
     messages,
     encrypted_messages,
     model: requestedModel,
-    stream = false,
   } = req.body;
 
   // E2EE mode: encrypted_messages replaces messages
@@ -630,9 +629,10 @@ app.post("/v1/chat", async (req, res) => {
       }
 
       // Build Venice request body
+      // NOTE: always stream: false — server does veniceResponse.json(), not SSE piping
       const veniceBody: Record<string, any> = {
         model: requestedModel || MODEL,
-        stream,
+        stream: false,
       };
       if (isE2EE) {
         // E2EE: forward encrypted blob, Venice TEE will decrypt
