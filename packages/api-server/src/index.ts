@@ -393,6 +393,7 @@ app.get("/circuit", (_req, res) => {
 // The client computes its own Merkle path locally — the server never learns
 // which commitment is about to be used. This replaces /merkle-path/:commitment.
 app.get("/tree", async (_req, res) => {
+  const tTree = Date.now();
   try {
     const leaves = treeLeaves;
     const numLeaves = leaves.length;
@@ -434,6 +435,7 @@ app.get("/tree", async (_req, res) => {
 
     const treeRoot = levels[treeDepth]?.[0] ?? leaves[0];
 
+    console.log(`[tree] built ${numLeaves} leaves in ${Date.now() - tTree}ms`);
     res.json({
       leaves: leaves.map((l) => l.toString()),
       levels: levels.map((level) => level.map((n) => n.toString())),
@@ -442,7 +444,7 @@ app.get("/tree", async (_req, res) => {
       zeros: zeros.map((z) => z.toString()),
     });
   } catch (err: any) {
-    console.error("Tree fetch error:", err);
+    console.error(`[tree] error after ${Date.now() - tTree}ms:`, err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -460,6 +462,11 @@ app.get("/tree", async (_req, res) => {
  * }
  */
 app.post("/v1/chat", async (req, res) => {
+  const reqId = Math.random().toString(36).slice(2, 8);
+  const t0 = Date.now();
+  const ts = () => `+${Date.now() - t0}ms`;
+  console.log(`[${reqId}] POST /v1/chat — received`);
+
   const { proof, publicInputs: clientPublicInputs, nullifier_hash, root, depth, messages } = req.body;
 
   // ─── Input Validation ───────────────────────────────────
@@ -472,14 +479,17 @@ app.post("/v1/chat", async (req, res) => {
 
   // ─── Double-spend protection (synchronous, before any await) ──
   if (spentNullifiers.has(nullifier_hash)) {
+    console.log(`[${reqId}] nullifier already spent (${ts()})`);
     res.status(403).json({ error: "Nullifier already spent" });
     return;
   }
   if (pendingNullifiers.has(nullifier_hash)) {
+    console.log(`[${reqId}] nullifier already pending (${ts()})`);
     res.status(429).json({ error: "This nullifier is currently being processed — try again in a moment" });
     return;
   }
   pendingNullifiers.add(nullifier_hash);
+  console.log(`[${reqId}] nullifier + root checks passed (${ts()})`);
 
   try {
     // ─── Verify root is in the valid historical set ─────────
@@ -495,14 +505,20 @@ app.post("/v1/chat", async (req, res) => {
     }
 
     // ─── Verify ZK proof ────────────────────────────────────
+    const tVerifyStart = Date.now();
+    console.log(`[${reqId}] starting proof verification (${ts()})`);
     try {
       const proofValid = await verifyProof(proof, nullifier_hash, root, depth, clientPublicInputs);
+      const verifyMs = Date.now() - tVerifyStart;
       if (!proofValid) {
+        console.log(`[${reqId}] proof INVALID — ${verifyMs}ms`);
         res.status(403).json({ error: "Invalid proof" });
         return;
       }
+      console.log(`[${reqId}] proof verified ✅ — ${verifyMs}ms`);
     } catch (verifyError: any) {
-      console.error("Proof verification error:", verifyError);
+      const verifyMs = Date.now() - tVerifyStart;
+      console.error(`[${reqId}] proof verification threw — ${verifyMs}ms:`, verifyError);
       res.status(403).json({
         error: "Proof verification failed",
         details: verifyError.message,
@@ -512,8 +528,11 @@ app.post("/v1/chat", async (req, res) => {
 
     // ─── Mark nullifier as spent BEFORE Venice call ─────────
     saveNullifier(nullifier_hash);
+    console.log(`[${reqId}] nullifier burned (${ts()})`);
 
     // ─── Forward to Venice API ──────────────────────────────
+    const tVeniceStart = Date.now();
+    console.log(`[${reqId}] calling Venice (${ts()})`);
     try {
       const veniceResponse = await fetch(
         `${VENICE_BASE_URL}/chat/completions`,
@@ -531,9 +550,11 @@ app.post("/v1/chat", async (req, res) => {
         }
       );
 
+      const veniceMs = Date.now() - tVeniceStart;
+
       if (!veniceResponse.ok) {
         const errorText = await veniceResponse.text();
-        console.error("Venice API error:", veniceResponse.status, errorText);
+        console.error(`[${reqId}] Venice error ${veniceResponse.status} — ${veniceMs}ms:`, errorText);
         res.status(502).json({
           error: "Venice API error",
           status: veniceResponse.status,
@@ -542,9 +563,12 @@ app.post("/v1/chat", async (req, res) => {
       }
 
       const veniceData = await veniceResponse.json();
+      const totalMs = Date.now() - t0;
+      console.log(`[${reqId}] ✅ done — Venice: ${veniceMs}ms | total: ${totalMs}ms`);
       res.json(veniceData);
     } catch (veniceError: any) {
-      console.error("Venice request failed:", veniceError);
+      const veniceMs = Date.now() - tVeniceStart;
+      console.error(`[${reqId}] Venice request failed — ${veniceMs}ms:`, veniceError);
       res.status(502).json({
         error: "Failed to reach Venice API",
         details: veniceError.message,
@@ -552,7 +576,7 @@ app.post("/v1/chat", async (req, res) => {
       return;
     }
   } catch (error: any) {
-    console.error("Unexpected error:", error);
+    console.error(`[${reqId}] unexpected error (${ts()}):`, error);
     res.status(500).json({ error: "Internal server error" });
   } finally {
     pendingNullifiers.delete(nullifier_hash);
