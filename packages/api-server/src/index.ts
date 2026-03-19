@@ -210,6 +210,15 @@ async function buildHistoricalRoots(): Promise<void> {
     const rootHex = rootToHex(root);
     validRoots.set(rootHex, event.blockNumber);
     currentRoot = rootHex;
+
+    // Also register the compact root for this tree state
+    const compactRoot = await computeCompactRoot(treeLeaves);
+    if (compactRoot !== null) {
+      const compactRootHex = rootToHex(compactRoot);
+      if (compactRootHex !== rootHex) {
+        validRoots.set(compactRootHex, event.blockNumber);
+      }
+    }
   }
 
   // Verify our computed root matches the contract's current root
@@ -243,6 +252,35 @@ async function buildHistoricalRoots(): Promise<void> {
  * Poll for new CreditRegistered events every 10 seconds.
  * Updates the tree state and valid roots set incrementally.
  */
+/**
+ * Compute the compact Merkle root from a list of leaves.
+ * depth = ceil(log2(n)), padded with zeros[0] on right.
+ * This is the root clients generate proofs against via /tree.
+ */
+async function computeCompactRoot(leaves: bigint[]): Promise<bigint | null> {
+  const n = leaves.length;
+  if (n === 0) return null;
+
+  let depth = 0;
+  let tmp = n;
+  while (tmp > 1) { depth++; tmp = Math.ceil(tmp / 2); }
+
+  const level0Size = depth === 0 ? 1 : 1 << depth;
+  let level: bigint[] = new Array(level0Size);
+  for (let i = 0; i < level0Size; i++) {
+    level[i] = i < n ? leaves[i] : zeros[0];
+  }
+  for (let lvl = 0; lvl < depth; lvl++) {
+    const parentSize = level.length >> 1;
+    const parent: bigint[] = new Array(parentSize);
+    for (let j = 0; j < parentSize; j++) {
+      parent[j] = await poseidon2Hash(level[j * 2], level[j * 2 + 1]);
+    }
+    level = parent;
+  }
+  return level[0];
+}
+
 async function handleNewEvent(event: {
   args: { commitment?: bigint; index?: bigint };
   blockNumber: bigint | null;
@@ -253,6 +291,17 @@ async function handleNewEvent(event: {
   validRoots.set(rootHex, event.blockNumber);
   currentRoot = rootHex;
   if (event.blockNumber > lastProcessedBlock) lastProcessedBlock = event.blockNumber;
+
+  // Also register the compact root that /tree returns — clients generate
+  // proofs against this root (depth=ceil(log2(n))), not the incremental root.
+  const compactRoot = await computeCompactRoot(treeLeaves);
+  if (compactRoot !== null) {
+    const compactRootHex = rootToHex(compactRoot);
+    if (compactRootHex !== rootHex) {
+      validRoots.set(compactRootHex, event.blockNumber);
+    }
+  }
+
   console.log(`New root: ${rootHex} (block ${event.blockNumber}, index ${event.args.index})`);
   await pruneOldRoots();
 }
@@ -438,19 +487,13 @@ app.get("/tree", async (_req, res) => {
       }
     }
 
-    // Use the incremental tree root — already computed correctly and verified
-    // against the on-chain contract. The levels array is only used for
-    // Merkle path extraction; the root clients use in their proofs must
-    // match what the server considers valid.
-    const authorativeRoot = currentRoot
-      ? BigInt(currentRoot).toString()
-      : (levels[treeDepth]?.[0] ?? leaves[0]).toString();
+    const treeRoot = levels[treeDepth]?.[0] ?? leaves[0];
 
     console.log(`[tree] built ${numLeaves} leaves (depth ${treeDepth}) in ${Date.now() - tTree}ms`);
     res.json({
       leaves: leaves.map((l) => l.toString()),
       levels: levels.map((level) => level.map((n) => n.toString())),
-      root: authorativeRoot,
+      root: treeRoot.toString(),
       depth: treeDepth,
       zeros: zeros.map((z) => z.toString()),
     });
