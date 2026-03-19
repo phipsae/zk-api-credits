@@ -8,6 +8,20 @@ echo "🔄 Pulling latest code..."
 cd ~/zk-api-credits
 git pull
 
+echo "🔍 Patching RPC/WS URLs (Alchemy)..."
+ALCHEMY_KEY="8GVG8WjDs-sGFRr6Rm839"
+for VAR_VALUE in \
+  "RPC_URL=https://base-mainnet.g.alchemy.com/v2/$ALCHEMY_KEY" \
+  "WS_URL=wss://base-mainnet.g.alchemy.com/v2/$ALCHEMY_KEY"; do
+  VAR="${VAR_VALUE%%=*}"
+  if grep -q "^$VAR=" packages/api-server/.env 2>/dev/null; then
+    sed -i "s|^$VAR=.*|$VAR_VALUE|" packages/api-server/.env
+  else
+    echo "$VAR_VALUE" >> packages/api-server/.env
+  fi
+done
+echo "   ✅ RPC/WS updated"
+
 echo "🔍 Syncing contract address from zkllmapi.com..."
 CONTRACT=$(curl -s https://zkllmapi.com/contract | python3 -c "import sys,json; print(json.load(sys.stdin)['address'])")
 if [ -z "$CONTRACT" ]; then
