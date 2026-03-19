@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import rateLimit from "express-rate-limit";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -340,6 +341,14 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
+const chatLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests — try again in a minute" },
+});
+
 // Health check
 app.get("/health", async (_req, res) => {
   res.json({
@@ -461,7 +470,7 @@ app.get("/tree", async (_req, res) => {
  *   "messages": [{ "role": "user", "content": "..." }],
  * }
  */
-app.post("/v1/chat", async (req, res) => {
+app.post("/v1/chat", chatLimiter, async (req, res) => {
   const reqId = Math.random().toString(36).slice(2, 8);
   const t0 = Date.now();
   const ts = () => `+${Date.now() - t0}ms`;
