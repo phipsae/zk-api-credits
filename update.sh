@@ -9,7 +9,7 @@ cd ~/zk-api-credits
 git pull
 
 echo "🔍 Patching RPC/WS URLs (Alchemy)..."
-ALCHEMY_KEY="8GVG8WjDs-sGFRr6Rm839"
+ALCHEMY_KEY="AlQf7KFYpAw_AlE4oCP85"
 for VAR_VALUE in \
   "RPC_URL=https://base-mainnet.g.alchemy.com/v2/$ALCHEMY_KEY" \
   "WS_URL=wss://base-mainnet.g.alchemy.com/v2/$ALCHEMY_KEY"; do
