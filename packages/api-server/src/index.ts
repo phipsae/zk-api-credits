@@ -389,7 +389,7 @@ const spentNullifiers = loadNullifiers();
 const pendingNullifiers = new Set<string>();
 
 // ─── Model (locked for demo — one credit, one model) ─────────
-const MODEL = "hermes-3-llama-3.1-405b";
+const MODEL = "minimax-m27";
 
 // ─── Express App ──────────────────────────────────────────────
 const app = express();
