@@ -467,7 +467,7 @@ app.post("/v1/chat", async (req, res) => {
   const ts = () => `+${Date.now() - t0}ms`;
   console.log(`[${reqId}] POST /v1/chat — received`);
 
-  const { proof, publicInputs: clientPublicInputs, nullifier_hash, root, depth, messages } = req.body;
+  const { proof, nullifier_hash, root, depth, messages } = req.body;
 
   // ─── Input Validation ───────────────────────────────────
   if (!proof || !nullifier_hash || !root || depth === undefined || !messages) {
@@ -508,7 +508,7 @@ app.post("/v1/chat", async (req, res) => {
     const tVerifyStart = Date.now();
     console.log(`[${reqId}] starting proof verification (${ts()})`);
     try {
-      const proofValid = await verifyProof(proof, nullifier_hash, root, depth, clientPublicInputs);
+      const proofValid = await verifyProof(proof, nullifier_hash, root, depth);
       const verifyMs = Date.now() - tVerifyStart;
       if (!proofValid) {
         console.log(`[${reqId}] proof INVALID — ${verifyMs}ms`);
@@ -589,7 +589,6 @@ async function verifyProof(
   nullifierHash: string,
   root: string,
   depth: number,
-  clientPublicInputs?: string[]
 ): Promise<boolean> {
   try {
     const { UltraHonkBackend } = await import("@aztec/bb.js");
@@ -601,9 +600,7 @@ async function verifyProof(
       "hex"
     );
 
-    // Use public inputs from client if provided (exact encoding from bb.js)
-    // Otherwise reconstruct them (may have encoding mismatches)
-    const publicInputs = clientPublicInputs ?? [
+    const publicInputs = [
       nullifierHash,
       root,
       "0x" + BigInt(depth).toString(16).padStart(64, "0"),
