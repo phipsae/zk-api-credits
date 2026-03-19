@@ -2,10 +2,12 @@ import express from "express";
 import cors from "cors";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import { fileURLToPath } from "url";
 import { createPublicClient, http, webSocket, parseAbi, parseAbiItem } from "viem";
 import { base } from "viem/chains";
 import { Barretenberg, Fr } from "@aztec/bb.js";
+import { VerifierPool } from "./verifier-pool.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -50,6 +52,11 @@ const VK_PATH = process.env.VK_PATH || path.resolve(
   __dirname,
   "../../circuits/target/vk"
 );
+
+const CIRCUIT_PATH = process.env.CIRCUIT_PATH || path.resolve(__dirname, "../../circuits/target/circuits.json");
+
+// Worker pool for proof verification (initialized in start())
+let verifierPool: VerifierPool;
 
 // ─── On-Chain Root Verification ───────────────────────────────
 const publicClient = createPublicClient({
@@ -646,35 +653,13 @@ async function verifyProof(
   clientPublicInputs?: string[]
 ): Promise<boolean> {
   try {
-    const { UltraHonkBackend } = await import("@aztec/bb.js");
-
-    const vkData = fs.readFileSync(VK_PATH);
-
-    const proofBytes = Buffer.from(
-      proofHex.startsWith("0x") ? proofHex.slice(2) : proofHex,
-      "hex"
-    );
-
     // Use public inputs from client if provided (exact encoding from bb.js)
-    // Otherwise reconstruct them (may have encoding mismatches)
     const publicInputs = clientPublicInputs ?? [
       nullifierHash,
       root,
       "0x" + BigInt(depth).toString(16).padStart(64, "0"),
     ];
-
-    const circuitPath = process.env.CIRCUIT_PATH || path.resolve(__dirname, "../../circuits/target/circuits.json");
-    const circuit = JSON.parse(fs.readFileSync(circuitPath, "utf-8"));
-
-    const backend = new UltraHonkBackend(circuit.bytecode);
-
-    const proof = {
-      proof: proofBytes,
-      publicInputs: publicInputs,
-    };
-
-    const valid = await backend.verifyProof(proof as any);
-    return valid;
+    return await verifierPool.verify(proofHex, publicInputs);
   } catch (error) {
     console.error("Proof verification error:", error);
     return false;
@@ -692,6 +677,15 @@ async function start() {
 
   // Build historical root set from all past events
   await buildHistoricalRoots();
+
+  // Initialize verifier worker pool
+  const poolSize = Math.max(1, os.cpus().length - 1);
+  console.log(`Initializing verifier pool (${poolSize} workers)...`);
+  const workerScript = path.resolve(__dirname, "verifier-worker.js");
+  const circuit = JSON.parse(fs.readFileSync(CIRCUIT_PATH, "utf-8"));
+  verifierPool = new VerifierPool(circuit.bytecode, workerScript, poolSize);
+  await verifierPool.init();
+  console.log(`Verifier pool ready (${poolSize} workers, WASM hot)`);
 
   // Record current block for incremental watching
   try {
@@ -718,6 +712,7 @@ async function start() {
     console.log(`   Nullifier file: ${NULLIFIER_FILE}`);
     console.log(`   Hash function: bb.js Poseidon2 (Noir-compatible)`);
     console.log(`   Tree type: Standard binary with zero-padding (Semaphore-style)`);
+    console.log(`   Verifier pool: ${verifierPool.size} workers (UltraHonkBackend pre-warmed)`);
     console.log(`\n   POST /v1/chat — Submit proof + get LLM response`);
     console.log(`   GET  /health  — Server health + valid roots count`);
     console.log(`   GET  /stats   — Server stats`);
