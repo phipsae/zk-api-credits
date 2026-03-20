@@ -389,7 +389,7 @@ const spentNullifiers = loadNullifiers();
 const pendingNullifiers = new Set<string>();
 
 // ─── Model (locked for demo — one credit, one model) ─────────
-const MODEL = "minimax-m27";
+const MODEL = "e2ee-glm-5";
 
 // ─── Express App ──────────────────────────────────────────────
 const app = express();
@@ -572,18 +572,22 @@ app.post("/v1/chat", async (req, res) => {
 
   try {
     // ─── Verify root is in the valid historical set ─────────
+    console.log(`[${reqId}] root check: validRoots.size=${validRoots.size}, checking root=${root.slice(0, 20)}... (${ts()})`);
     if (validRoots.size === 0) {
+      console.log(`[${reqId}] no valid roots (${ts()})`);
       res.status(403).json({ error: "No commitments registered yet" });
       return;
     }
     if (!validRoots.has(root)) {
+      console.log(`[${reqId}] root not in valid set (${ts()})`);
       res.status(403).json({
         error: "Invalid root — not in valid root set (may be expired or incorrect)",
       });
       return;
     }
+    console.log(`[${reqId}] root valid ✅ (${ts()})`);
 
-    // ─── Verify ZK proof ────────────────────────────────────
+    // ─── Verify ZK proof ───────────────────────────────────
     const tVerifyStart = Date.now();
     console.log(`[${reqId}] starting proof verification (${ts()})`);
     try {
