@@ -389,7 +389,7 @@ const spentNullifiers = loadNullifiers();
 const pendingNullifiers = new Set<string>();
 
 // ─── Model (locked for demo — one credit, one model) ─────────
-const MODEL = "e2ee-glm-5";
+const MODEL = process.env.VENICE_MODEL || "hermes-3-llama-3.1-405b";
 
 // ─── Express App ──────────────────────────────────────────────
 const app = express();
@@ -537,6 +537,10 @@ app.post("/v1/chat", async (req, res) => {
     encrypted_messages,
   } = req.body;
 
+  if (req.body.model && req.body.model !== MODEL) {
+    console.log(`[${reqId}] client requested model "${req.body.model}" — ignored, using "${MODEL}"`);
+  }
+
   // E2EE mode: encrypted_messages replaces messages
   const isE2EE = !!encrypted_messages;
 
@@ -633,7 +637,7 @@ app.post("/v1/chat", async (req, res) => {
       // Build Venice request body
       // NOTE: always stream: false — server does veniceResponse.json(), not SSE piping
       const veniceBody: Record<string, any> = {
-        model: requestedModel || MODEL,
+        model: MODEL,
         stream: false,
       };
       if (isE2EE) {
@@ -740,6 +744,7 @@ async function start() {
   app.listen(PORT, () => {
     console.log(`\n🔐 ZK API Credits Server`);
     console.log(`   Port: ${PORT}`);
+    console.log(`   Model: ${MODEL}`);
     console.log(`   Venice: ${VENICE_BASE_URL}`);
     console.log(`   VK: ${VK_PATH}`);
     console.log(`   Contract: ${CONTRACT_ADDRESS}`);
